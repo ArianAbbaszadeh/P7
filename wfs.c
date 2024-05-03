@@ -66,7 +66,7 @@ off_t alloc_block(){
    printf("allocing block\n");
    int blocknum = -1; 
    int* bitmap = (int*)(addr + superblock->d_bitmap_ptr);
-   for(char i = 0; i < superblock->num_inodes; i++){
+   for(char i = 0; i < superblock->num_data_blocks; i++){
        int byte_off = i/32;
        int bit_off = i%32;
        int temp = 1 << bit_off;
@@ -80,7 +80,6 @@ off_t alloc_block(){
    if(blocknum == -1){
        return -1;
    }
-   memset(addr + superblock->d_blocks_ptr + blocknum * BLOCK_SIZE, 0, BLOCK_SIZE);
    return (off_t)(superblock->d_blocks_ptr + blocknum * BLOCK_SIZE);
 }
 
@@ -569,22 +568,18 @@ int main(int argc, char** argv){
    superblock = (struct wfs_sb*)addr;
    close(disk_img);
     /*
-
-   for(int i = 0; i < 65; i++){
-    char file[6] = "/file0";
-    file[5] = i + 48;
-    wfs_mknod(file, __S_IFREG, 0);
-   }
-   return 0;
-   int filesize = (N_BLOCKS + 1) * BLOCK_SIZE;
+   int filesize = (64 - 2) * BLOCK_SIZE;
    char* large =(char*) malloc(filesize); 
    memset(large, 12, filesize);
+
    wfs_mknod("/large.txt", __S_IFREG, 0);
    wfs_write("/large.txt", large, filesize, 0, NULL);
-   char* buf = (char*) malloc(filesize + 1); 
-   wfs_read()
    //wfs_unlink("/file");
-    
+   struct stat* stat = (struct stat*)malloc(sizeof(struct stat));
+   wfs_getattr("/large.txt", stat);
+   printf("size: %ld\n", stat->st_size);
+    wfs_write("/large.txt", "a", sizeof("a"), (stat->st_size), NULL);
+
    return 0;
    */
    int fuse_stat = fuse_main(argc - 2, argv + 2, &ops, NULL); 
