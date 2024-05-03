@@ -69,11 +69,8 @@ off_t alloc_block(){
     char* bitmap = (char*)(addr + superblock->d_bitmap_ptr);
     for(char i = 0; i < superblock->num_inodes; i++){
         int byte_off = i/8;
-        int bit_off = 7 - i%8;
-        int temp = 1;
-        for(int i = 0; i < bit_off; i++){
-            temp *= 2;
-        }
+        int bit_off = i%8;
+        int temp = 1 << bit_off;
         if((bitmap[byte_off] & temp) >> bit_off == 0){
             printf("block %d is open at address %lx\n", i, &bitmap[byte_off] - addr);
             blocknum = i;
@@ -81,7 +78,7 @@ off_t alloc_block(){
             break;
         }
     }
-
+    memset(addr + superblock->d_blocks_ptr + blocknum * BLOCK_SIZE, 0, BLOCK_SIZE);
     return (off_t)(superblock->d_blocks_ptr + blocknum * BLOCK_SIZE);
 }
 
@@ -92,7 +89,6 @@ int create_dentry(struct wfs_inode* p_inode, char* name, int inum){
         if((p_inode->blocks[0] = alloc_block()) == -1){
             return -1;
         }
-        p_inode->size += sizeof(struct wfs_dentry);
         p_inode->nlinks++;
     }
     for(int i = 0; i < p_inode->nlinks; i++){
@@ -100,7 +96,7 @@ int create_dentry(struct wfs_inode* p_inode, char* name, int inum){
         struct wfs_dentry* dentries = (struct wfs_dentry*)(addr + p_inode->blocks[i]);
         for(int j = 0; j < (BLOCK_SIZE/sizeof(struct wfs_dentry)); j++){
             if(dentries[j].num == 0){
-                memcpy(&dentries[j].num, &inum, sizeof(int));
+                dentries[j].num = inum;
                 memcpy(&dentries[j].name, name, sizeof(dentries[j].name)); 
                 p_inode->size += sizeof(struct wfs_dentry);
                 time_t curtime = time(NULL);
@@ -118,6 +114,7 @@ int create_dentry(struct wfs_inode* p_inode, char* name, int inum){
         }
         p_inode->size += sizeof(struct wfs_dentry);
         p_inode->nlinks++;
+        return create_dentry(p_inode, name, inum);
     }
 
     return -1;
@@ -129,11 +126,8 @@ struct wfs_inode* allocate_inode(){
     char* bitmap = (char*)(addr + superblock->i_bitmap_ptr);
     for(char i = 0; i < superblock->num_inodes; i++){
         int byte_off = i/8;
-        int bit_off = 7 - i%8;
-        int temp = 1;
-        for(int i = 0; i < bit_off; i++){
-            temp *= 2;
-        }
+        int bit_off = i%8;
+        int temp = 1 << bit_off;
         if(((bitmap[byte_off] & temp) >> bit_off) == 0){
             printf("inode %d is open at address %lx\n", i, &bitmap[byte_off] - addr);
             new_inum = i;
@@ -150,8 +144,11 @@ struct wfs_inode* allocate_inode(){
 }
 
 void free_inode(struct wfs_inode* inode){
+    if(S_ISDIR(inode->mode) && inode->size != 0){
+        printf("directory must be empty\n");
+    }
     int byte_off = inode->num/8;
-    int bit_off = inode->num % 8;
+    int bit_off = inode->num %8;
     int temp = 1;
     int total = 0;
     for(int i = 0; i < 8; i++){
@@ -162,6 +159,12 @@ void free_inode(struct wfs_inode* inode){
     }
     char* bitmap = (addr + superblock->i_bitmap_ptr + inode->num);
     bitmap[byte_off] &= total;
+
+    for(int i = 0; i < N_BLOCKS; i++){
+        if(inode->blocks[i] != (off_t)0){
+            //free_block(inode->blocks[i]);
+        }
+    }
     memset((struct wfs_inode*)(addr + superblock->i_bitmap_ptr + inode->num * BLOCK_SIZE), 0, sizeof(struct wfs_inode));
 }
 
@@ -189,7 +192,7 @@ static int wfs_mknod(const char* path, mode_t mode, dev_t rdev){
         printf("file already exists");
         return -EEXIST;
     }
-
+    printf("hi\n");
     struct wfs_inode* inode = allocate_inode();
     printf("%d\n", inode->num);
     if(inode == NULL){
@@ -279,10 +282,58 @@ static int wfs_read(const char* path, char* buf, size_t size, off_t offset, stru
 }
 
 static int wfs_write(const char* path, const char *buf, size_t size, off_t offset, struct fuse_file_info* fi){
-    return 1;
+    printf("Writing %ld bytes to file %s\n", size, path);
+    int num_bytes = 0; 
+    int inum = get_inode_from_path(path);
+    if(inum < 0){
+        printf("File %s not found\n", path);
+        return -ENOENT;
+    }
+    struct wfs_inode* inode = (struct wfs_inode*)(addr + superblock->i_blocks_ptr + inum * BLOCK_SIZE);
+    if(size > N_BLOCKS * BLOCK_SIZE - offset){
+        printf("Not enough space in file\n");
+        return -ENOSPC;
+    }
+    off_t start = offset;
+    off_t end = offset + size > N_BLOCKS * BLOCK_SIZE  ? N_BLOCKS * BLOCK_SIZE  : offset + size;
+    printf("%ld, %ld\n", start, end);
+    for(int i = start/BLOCK_SIZE; i < N_BLOCKS; i++){
+        if(start >= end){
+            return num_bytes;
+        }
+        if(inode->blocks[i] == (off_t)0){
+            if((inode->blocks[i] = alloc_block()) == -1){
+                return -ENOSPC;
+            }
+            inode->nlinks++;
+        }
+        char* block_ptr = addr + inode->blocks[i];
+        size_t to_write;
+
+        if(end - start <= (block_ptr + BLOCK_SIZE) - (block_ptr + start % BLOCK_SIZE)){
+            to_write = end - start;
+        } else {
+            to_write = (block_ptr + BLOCK_SIZE) - (block_ptr + start% BLOCK_SIZE);
+        }
+        memcpy(block_ptr + start % BLOCK_SIZE, buf + num_bytes, to_write);
+        num_bytes += to_write;
+        start += num_bytes;
+        inode->size+= to_write;
+    }
+    
+    return num_bytes;
 }
 
+
 static int wfs_readdir(const char* path, void* buf, fuse_fill_dir_t filler, off_t offset, struct fuse_file_info* fi){
+    int inum = get_inode_from_path(path);
+    if(inum < 0){
+        return -ENOENT;
+    }
+    struct wfs_inode* inode = (struct wfs_inode*)(addr + superblock->i_blocks_ptr + inum * BLOCK_SIZE);
+    if(!S_ISDIR(inode->mode)){
+
+    }
     return 0;
 }
 
@@ -314,14 +365,18 @@ int main(int argc, char** argv){
 	close(disk_img);
     
     struct stat* buf =(struct stat*) malloc(sizeof(struct stat)); 
-    wfs_mknod("/file0", __S_IFDIR, 0);
-    wfs_mknod("/dir0/file00", __S_IFREG, 0);
-
-    wfs_getattr("/dir0/file00", buf);
+    wfs_mknod("/dir0", __S_IFDIR, 0);
+    //wfs_mknod("/dir0/file00", __S_IFREG, 0);
+    //wfs_write("dir0/file00", "Hello", sizeof("Hello"), 0, NULL);
+    wfs_getattr("/dir0", buf);
+    //char buf2[10];
+    //int num_bytes = wfs_read("dir0/file00", buf2, 10, 0, NULL);    
+    //printf("dir0/file00: %s, %d bytes\n", buf2, num_bytes);
     printf("uid %d, gid: %d, atim: %ld, mtim: %ld,size: %ld, mode: %d\n", buf->st_uid, buf->st_gid, buf->st_atime, buf->st_mtime, buf->st_size, buf->st_mode);
     free(buf);
     return 0;
     
+
     int fuse_stat = fuse_main(argc - 2, argv + 2, &ops, NULL); 
     return fuse_stat;
 }

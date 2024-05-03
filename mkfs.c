@@ -1,4 +1,5 @@
 #include "wfs.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <errno.h>
@@ -32,10 +33,11 @@ int init_filesystem(int disk_img, uint32_t num_inodes, uint32_t num_blocks){
 	sb->d_blocks_ptr = (off_t) (sb->i_blocks_ptr + num_inodes * BLOCK_SIZE);
 
 	char* bitmap = (char*)(addr + sb->i_bitmap_ptr);
-	bitmap[0] |= 1 << 7;
+	bitmap[0] |= 1;
 
 	struct wfs_inode* root = (struct wfs_inode*)(addr + sb->i_blocks_ptr);
 	
+
 	root->gid = getgid();
 	root->uid = getuid();
 	root->mode = __S_IFDIR;
