@@ -6,11 +6,11 @@ FUSE_CFLAGS = `pkg-config fuse --cflags --libs`
 
 test: all
 	./create_disk.sh 
-	./mkfs -d disk.img -i 32 -b 200
+	./mkfs -d disk.img -i 96 -b 200
 	./wfs disk.img -s -f mnt
 run: all
 	./create_disk.sh 
-	./mkfs -d disk.img -i 32 -b 200
+	./mkfs -d disk.img -i 96 -b 200
 	umount.sh mnt
 	rmdir mnt
 	mkdir mnt
